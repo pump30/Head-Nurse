@@ -1,0 +1,35 @@
+# GitHub Kanban Agent Configuration
+# Copy to ~/.config/kanban-agent/config.yaml and fill in your values
+
+# GitHub repo for task management (must exist, private recommended)
+repo: "YOUR_USERNAME/kanban-tasks"
+
+# GitHub Project V2 number (visible in project URL)
+project_number: 1
+
+# How often to poll for new tasks (seconds)
+poll_interval_seconds: 30
+
+# Working directory for Claude Code execution
+claude_working_dir: "~/Projects"
+
+# Claude Code permission mode: acceptEdits | plan | dangerously-skip-permissions
+claude_permission_mode: "acceptEdits"
+
+# Max time for a single task (seconds)
+task_timeout_seconds: 600
+
+# Max concurrent tasks (future use)
+max_concurrent_tasks: 1
+
+# Budget cap per task (USD)
+max_budget_per_task_usd: 1.0
+
+# Log file path
+log_file: "~/Library/Logs/kanban-agent.log"
+
+# Log level: DEBUG | INFO | WARNING | ERROR
+log_level: "INFO"
+
+# State file for crash recovery
+state_file: "~/.local/state/kanban-agent/state.json"
