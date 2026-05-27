@@ -6,18 +6,34 @@ CONFIG_DIR="${HOME}/.config/kanban-agent"
 APP_DEST="${HOME}/Applications/HeadNurse.app"
 OLD_PLIST="${HOME}/Library/LaunchAgents/com.kanban-agent.plist"
 
-echo "Step 1: Verifying Python 3.11+ at /opt/homebrew/bin/python3"
-/opt/homebrew/bin/python3 -c 'import sys; assert sys.version_info >= (3,11), sys.version'
+# Pick a Python 3.11+ that has setuptools available. py2app + pyobjc are
+# fussy about which interpreter; we prefer 3.13 because newer (3.14+) is
+# often missing prebuilt wheels for the deps we need.
+PYTHON=""
+for candidate in /opt/homebrew/bin/python3.13 /opt/homebrew/bin/python3.12 /opt/homebrew/bin/python3.11 /opt/homebrew/bin/python3 /usr/bin/python3; do
+    if [ -x "$candidate" ] && "$candidate" -c 'import sys, setuptools; assert sys.version_info >= (3,11)' 2>/dev/null; then
+        PYTHON="$candidate"
+        break
+    fi
+done
+
+if [ -z "$PYTHON" ]; then
+    echo "ERROR: Could not find Python 3.11+ with setuptools." >&2
+    echo "       Install via: brew install python@3.13" >&2
+    exit 1
+fi
+
+echo "Step 1: Using ${PYTHON}"
 
 echo "Step 2: Installing kanban-agent and dev deps"
-/opt/homebrew/bin/python3 -m pip install -e ".[dev]" --break-system-packages
+"$PYTHON" -m pip install -e ".[dev]" --break-system-packages
 
 echo "Step 3: Rendering icons"
-/opt/homebrew/bin/python3 scripts/render_icons.py
+"$PYTHON" scripts/render_icons.py
 
 echo "Step 4: Building HeadNurse.app"
 rm -rf build dist
-/opt/homebrew/bin/python3 setup_app.py py2app
+"$PYTHON" setup_app.py py2app
 
 echo "Step 5: Installing app to ~/Applications"
 mkdir -p "${HOME}/Applications"
