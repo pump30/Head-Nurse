@@ -89,3 +89,44 @@ class TestIcon:
     def test_crashed_uses_off_icon(self):
         s = AgentStatus(state="crashed")
         assert s.icon_name == "icon-off"
+
+
+class TestAgentStatus:
+    def _make_config(self, tmp_path):
+        from kanban_agent.config import Config
+        return Config(
+            repo="x/y",
+            project_number=1,
+            poll_interval_seconds=30,
+            claude_command="echo",
+            claude_working_dir=str(tmp_path),
+            claude_permission_mode="acceptEdits",
+            task_timeout_seconds=10,
+            max_budget_per_task_usd=1.0,
+            log_file=str(tmp_path / "log"),
+            log_level="INFO",
+            state_file=str(tmp_path / "state.json"),
+        )
+
+    def test_agent_starts_stopped(self, tmp_path):
+        from kanban_agent.agent import KanbanAgent
+        agent = KanbanAgent(self._make_config(tmp_path))
+        assert agent.current_status.state == "stopped"
+
+    def test_set_status_updates(self, tmp_path):
+        from kanban_agent.agent import KanbanAgent
+        agent = KanbanAgent(self._make_config(tmp_path))
+        agent._set_status(state="running", current_phase="polling")
+        s = agent.current_status
+        assert s.state == "running"
+        assert s.current_phase == "polling"
+
+    def test_shutdown_writes_stopped(self, tmp_path):
+        from kanban_agent.agent import KanbanAgent
+        agent = KanbanAgent(self._make_config(tmp_path))
+        agent._set_status(state="running", current_issue=42, current_phase="executing")
+        agent.shutdown()
+        s = agent.current_status
+        assert s.state == "stopped"
+        assert s.current_issue is None
+        assert s.current_phase is None

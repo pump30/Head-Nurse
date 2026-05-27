@@ -9,6 +9,7 @@ from .github import GitHubClient
 from .models import Task, TaskStatus
 from .project_board import ProjectBoard
 from .executor import TaskExecutor, ExecutionResult
+from .status import AgentStatus, StatusHolder
 
 logger = logging.getLogger(__name__)
 
@@ -95,15 +96,18 @@ class KanbanAgent:
         self.executor = TaskExecutor(config)
         self.state = AgentState(config.state_file)
         self._shutdown_event = asyncio.Event()
+        self._status = StatusHolder()
         self._agent_username: Optional[str] = None
 
     async def run(self) -> None:
+        self._set_status(state="starting")
         await self.board.initialize()
         self._agent_username = await self.github.get_authenticated_user()
         logger.info(
             "Kanban Agent started (user=%s, repo=%s, poll=%ds)",
             self._agent_username, self.config.repo, self.config.poll_interval_seconds,
         )
+        self._set_status(state="running", current_phase="polling")
 
         while not self._shutdown_event.is_set():
             try:
@@ -133,12 +137,14 @@ class KanbanAgent:
 
     async def _handle_new_task(self, task: Task) -> None:
         logger.info("Picking up task #%d: %s", task.issue_number, task.title)
+        self._set_status(state="running", current_issue=task.issue_number, current_phase="executing")
 
         await self.board.move_to_status(task.project_item_id, TaskStatus.IN_PROGRESS)
         self.state.mark_in_progress(task)
 
         result = await self._execute_and_post(task, task.body)
         await self._finalize_task(task, result)
+        self._set_status(current_issue=None, current_phase="polling")
 
     async def _check_follow_ups(self) -> None:
         tracked = self.state.get_all_tracked_issues()
@@ -173,6 +179,7 @@ class KanbanAgent:
 
     async def _handle_follow_up(self, issue_number: int, info: dict, comment: dict) -> None:
         logger.info("Follow-up on #%d: %s", issue_number, comment["body"][:80])
+        self._set_status(state="running", current_issue=issue_number, current_phase="executing")
 
         task = Task(
             issue_number=issue_number,
@@ -193,6 +200,7 @@ class KanbanAgent:
         self.state.update_last_comment_id(issue_number, comment_id)
 
         await self._finalize_task(task, result)
+        self._set_status(current_issue=None, current_phase="polling")
 
     async def _execute_and_post(self, task: Task, prompt: str) -> ExecutionResult:
         placeholder = f"---\n{TaskExecutor.ICON} **Claude Code** · executing..."
@@ -226,6 +234,14 @@ class KanbanAgent:
             self.state.mark_failed(task)
             logger.warning("Task #%d failed (exit=%d)", task.issue_number, result.exit_code)
 
+    @property
+    def current_status(self) -> AgentStatus:
+        return self._status.get()
+
+    def _set_status(self, **changes) -> None:
+        self._status.update(**changes)
+
     def shutdown(self) -> None:
         logger.info("Shutdown requested")
         self._shutdown_event.set()
+        self._set_status(state="stopped", current_issue=None, current_phase=None)
