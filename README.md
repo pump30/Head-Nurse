@@ -20,6 +20,16 @@ chmod +x setup.sh
 ./setup.sh
 ```
 
+This builds `HeadNurse.app`, installs it to `~/Applications`, and migrates any existing launchd setup. Edit `~/.config/kanban-agent/config.yaml` then launch:
+
+```bash
+open ~/Applications/HeadNurse.app
+```
+
+The app appears in the menu bar (no Dock icon). Click the icon to Start/Stop the agent, open the config, or view logs.
+
+To auto-start at login: System Settings → General → Login Items → drag `HeadNurse.app` into the list.
+
 ## Configuration
 
 `~/.config/kanban-agent/config.yaml`:
@@ -35,11 +45,15 @@ task_timeout_seconds: 600
 max_budget_per_task_usd: 1.0
 ```
 
-## Run manually
+## Run manually (headless)
+
+For debugging or non-GUI use:
 
 ```bash
 python -m kanban_agent
 ```
+
+This skips the menubar and runs the agent directly in the foreground.
 
 ## Architecture
 
