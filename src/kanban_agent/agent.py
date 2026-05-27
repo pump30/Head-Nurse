@@ -42,10 +42,14 @@ class AgentState:
 
     def mark_completed(self, task: Task, session_id: Optional[str] = None) -> None:
         in_progress_entry = self._data["in_progress"].pop(str(task.issue_number), {})
+        existing_completed = self._data["completed"].get(str(task.issue_number), {})
         self._data["completed"][str(task.issue_number)] = {
             "claude_session_id": session_id,
             "project_item_id": in_progress_entry.get("project_item_id") or task.project_item_id,
-            "last_processed_comment_id": in_progress_entry.get("last_processed_comment_id"),
+            "last_processed_comment_id": (
+                in_progress_entry.get("last_processed_comment_id")
+                or existing_completed.get("last_processed_comment_id")
+            ),
         }
         self._save()
 
