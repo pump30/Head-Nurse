@@ -171,10 +171,11 @@ class MenubarApp:
 
     def _on_open_config(self, _sender) -> None:
         path = Path.home() / ".config" / "kanban-agent" / "config.yaml"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if not path.exists():
-            path.write_text("# kanban-agent config — see README\n")
-        subprocess.run(["open", str(path)], check=False)
+        if path.exists():
+            subprocess.run(["open", str(path)], check=False)
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            subprocess.run(["open", str(path.parent)], check=False)
 
     def _on_view_logs(self, _sender) -> None:
         log_path = Path.home() / "Library" / "Logs" / "kanban-agent-stdout.log"
