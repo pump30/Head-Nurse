@@ -17,7 +17,7 @@ _dist_mod.Distribution.parse_config_files = _skip_pyproject_config
 
 from setuptools import setup  # noqa: E402  (must come after patch)
 
-APP = ["src/kanban_agent/menubar.py"]
+APP = ["launcher.py"]
 DATA_FILES = [("", ["resources/icon-on.png", "resources/icon-off.png"])]
 OPTIONS = {
     "argv_emulation": False,
