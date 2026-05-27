@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import threading
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from typing import Literal, Optional
 
 State = Literal["stopped", "starting", "running", "crashed"]
