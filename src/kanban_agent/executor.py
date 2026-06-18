@@ -1,8 +1,11 @@
 import asyncio
 import logging
+import os
 import re
+import shutil
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 from .config import Config
@@ -11,6 +14,36 @@ from .models import Task
 logger = logging.getLogger(__name__)
 
 MAX_COMMENT_LENGTH = 60000
+
+# Build a subprocess env with well-known PATH entries for macOS GUI apps.
+_EXTRA_PATHS = [
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+    str(Path.home() / ".local" / "bin"),
+    str(Path.home() / ".nvm" / "versions" / "node" / "v22.22.0" / "bin"),
+]
+
+
+def _subprocess_env() -> dict[str, str]:
+    """Return an env dict with PATH augmented for macOS .app bundles."""
+    env = os.environ.copy()
+    existing = env.get("PATH", "/usr/bin:/bin")
+    prepend = ":".join(p for p in _EXTRA_PATHS if Path(p).is_dir())
+    env["PATH"] = f"{prepend}:{existing}" if prepend else existing
+    return env
+
+
+def _resolve_claude(config_command: str) -> str:
+    """Resolve the claude command to an absolute path if possible."""
+    if os.path.isabs(config_command):
+        return config_command
+    # Check well-known locations
+    for base in _EXTRA_PATHS:
+        candidate = os.path.join(base, config_command)
+        if os.path.isfile(candidate):
+            return candidate
+    found = shutil.which(config_command)
+    return found or config_command
 
 
 @dataclass
@@ -27,12 +60,14 @@ class TaskExecutor:
     def __init__(self, config: Config):
         self.config = config
         self._running: dict[int, asyncio.subprocess.Process] = {}
+        self._claude_bin = _resolve_claude(config.claude_command)
+        self._env = _subprocess_env()
 
     async def execute_task(self, task: Task, prompt: str) -> ExecutionResult:
         session_id = task.claude_session_id or str(uuid.uuid4())
 
         cmd = [
-            self.config.claude_command,
+            self._claude_bin,
             "-p",
             prompt,
             "--output-format", "text",
@@ -51,6 +86,7 @@ class TaskExecutor:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=self.config.claude_working_dir,
+            env=self._env,
         )
         self._running[task.issue_number] = proc
 

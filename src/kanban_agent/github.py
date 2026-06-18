@@ -1,12 +1,37 @@
 import asyncio
 import json
 import logging
+import shutil
+from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 MAX_RETRIES = 3
 RETRY_DELAYS = [5, 15, 45]
+
+# macOS GUI apps don't inherit shell PATH; resolve gh at import time.
+_GH_CANDIDATES = [
+    "/opt/homebrew/bin/gh",
+    "/usr/local/bin/gh",
+    "/usr/bin/gh",
+]
+
+
+def _find_gh() -> str:
+    """Find the gh binary, checking well-known paths first (for GUI apps)."""
+    for candidate in _GH_CANDIDATES:
+        if Path(candidate).is_file():
+            return candidate
+    found = shutil.which("gh")
+    if found:
+        return found
+    raise FileNotFoundError(
+        "Cannot find 'gh' CLI. Install it via: brew install gh"
+    )
+
+
+GH_BIN = _find_gh()
 
 
 class GitHubError(Exception):
@@ -21,7 +46,7 @@ class GitHubClient:
     async def _run_gh(self, args: list[str], input_data: Optional[str] = None) -> str:
         for attempt in range(MAX_RETRIES):
             proc = await asyncio.create_subprocess_exec(
-                "gh", *args,
+                GH_BIN, *args,
                 stdin=asyncio.subprocess.PIPE if input_data else None,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
