@@ -64,6 +64,14 @@ class TaskExecutor:
         self._env = _subprocess_env()
 
     async def execute_task(self, task: Task, prompt: str) -> ExecutionResult:
+        if not prompt or not prompt.strip():
+            return ExecutionResult(
+                stdout="",
+                stderr="Empty prompt: issue has no body or title",
+                exit_code=1,
+                session_id="",
+            )
+
         session_id = task.claude_session_id or str(uuid.uuid4())
 
         cmd = [

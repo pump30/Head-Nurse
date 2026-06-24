@@ -146,7 +146,8 @@ class KanbanAgent:
         await self.board.move_to_status(task.project_item_id, TaskStatus.IN_PROGRESS)
         self.state.mark_in_progress(task)
 
-        result = await self._execute_and_post(task, task.body)
+        prompt = task.body or task.title
+        result = await self._execute_and_post(task, prompt)
         await self._finalize_task(task, result)
         self._set_status(current_issue=None, current_phase="polling")
 
