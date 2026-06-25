@@ -80,8 +80,9 @@ class TaskExecutor:
             prompt,
             "--output-format", "text",
             "--permission-mode", self.config.claude_permission_mode,
-            "--max-budget-usd", str(self.config.max_budget_per_task_usd),
         ]
+        if self.config.max_budget_per_task_usd > 0:
+            cmd.extend(["--max-budget-usd", str(self.config.max_budget_per_task_usd)])
         if task.claude_session_id:
             cmd.extend(["--resume", session_id])
         else:

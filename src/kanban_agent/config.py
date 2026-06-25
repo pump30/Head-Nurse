@@ -15,7 +15,7 @@ class Config:
     claude_permission_mode: str = "acceptEdits"
     task_timeout_seconds: int = 600
     max_concurrent_tasks: int = 1
-    max_budget_per_task_usd: float = 1.0
+    max_budget_per_task_usd: float = 0  # 0 = unlimited
     log_file: str = "~/Library/Logs/kanban-agent.log"
     log_level: str = "INFO"
     state_file: str = "~/.local/state/kanban-agent/state.json"
