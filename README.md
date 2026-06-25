@@ -72,3 +72,28 @@ This skips the menubar and runs the agent directly in the foreground.
 - **Waiting state** — detects when Claude asks a question, pauses until you reply
 - **Comment editing** — "executing..." placeholder gets replaced with final result
 - **Crash recovery** — state persisted to JSON, launchd auto-restarts
+
+## Calendar Sync (Outlook → CalDAV)
+
+Optionally mirrors your Outlook calendar to a self-hosted CalDAV server (e.g., Radicale on NAS).
+
+**Setup:**
+
+1. Ensure Outlook MCP tokens exist at `~/.sap-mcp/cookies/outlook/sap_tokens.json`
+2. Add `calendar_sync` section to `~/.config/kanban-agent/config.yaml`:
+
+```yaml
+calendar_sync:
+  enabled: true
+  caldav_url: "https://your-nas:5232/user/calendar/"
+  caldav_username: "user"
+  caldav_password: "pass"
+```
+
+3. Restart HeadNurse — sync starts automatically every 15 minutes.
+
+**Behavior:**
+- One-way sync: Outlook → CalDAV (CalDAV is a read-only mirror)
+- Syncs today + 14 days ahead
+- Creates, updates, and deletes events to match Outlook
+- Token refresh handled automatically

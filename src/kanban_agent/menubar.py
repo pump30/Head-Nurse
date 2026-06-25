@@ -11,6 +11,7 @@ from typing import Optional
 import rumps
 
 from .agent import KanbanAgent
+from .calendar_sync import CalendarSync
 from .config import Config
 from .logging_setup import setup_logging
 from .status import AgentStatus, StatusHolder
@@ -39,6 +40,7 @@ class MenubarApp:
         )
         self.app.menu = [
             "status_row",
+            "calendar_row",
             None,
             "toggle",
             "restart",
@@ -51,6 +53,7 @@ class MenubarApp:
         self._configure_menu()
 
         self._agent: Optional[KanbanAgent] = None
+        self._calendar_sync: Optional[CalendarSync] = None
         self._thread: Optional[threading.Thread] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._fallback_status = StatusHolder()
@@ -64,6 +67,8 @@ class MenubarApp:
         m = self.app.menu
         m["status_row"].title = "○ Stopped"
         m["status_row"].set_callback(None)  # disabled
+        m["calendar_row"].title = "📅 Calendar: --"
+        m["calendar_row"].set_callback(None)  # disabled
         m["toggle"].title = "Start Agent"
         m["toggle"].set_callback(self._on_toggle)
         m["restart"].title = "Restart Agent"
@@ -97,6 +102,11 @@ class MenubarApp:
         setup_logging(config.log_file, config.log_level)
         self._fallback_status.set(AgentStatus(state="starting"))
         self._agent = KanbanAgent(config)
+
+        # Create CalendarSync if configured
+        if config.calendar_sync and config.calendar_sync.enabled:
+            self._calendar_sync = CalendarSync(config.calendar_sync)
+
         self._thread = threading.Thread(
             target=self._run_agent, name="kanban-agent", daemon=True
         )
@@ -108,12 +118,24 @@ class MenubarApp:
         self._loop = loop
         try:
             asyncio.set_event_loop(loop)
+
+            # Start calendar sync in the same loop
+            if self._calendar_sync:
+                loop.run_until_complete(self._calendar_sync.start())
+
             loop.run_until_complete(self._agent.run())
         except Exception:
             logger.exception("Agent crashed")
             if self._agent is not None:
                 self._agent._set_status(state="crashed", error="see logs")
         finally:
+            # Stop calendar sync
+            if self._calendar_sync:
+                try:
+                    loop.run_until_complete(self._calendar_sync.stop())
+                except Exception:
+                    pass
+
             loop.close()
             self._loop = None
 
@@ -129,6 +151,7 @@ class MenubarApp:
         if self._thread:
             self._thread.join(timeout=timeout)
         self._agent = None
+        self._calendar_sync = None
         self._thread = None
         self._fallback_status.set(AgentStatus(state="stopped"))
 
@@ -145,6 +168,14 @@ class MenubarApp:
         m = self.app.menu
         m["status_row"].title = status.menu_text
         self.app.icon = _icon_path(status.icon_name)
+
+        # Update calendar sync status
+        if self._calendar_sync and self._calendar_sync.last_sync_time:
+            m["calendar_row"].title = f"📅 Calendar: synced {self._calendar_sync.last_sync_time}"
+        elif self._calendar_sync:
+            m["calendar_row"].title = "📅 Calendar: pending"
+        else:
+            m["calendar_row"].title = "📅 Calendar: off"
 
         running_like = status.state in ("running", "starting")
         m["toggle"].title = "Stop Agent" if running_like else "Start Agent"
