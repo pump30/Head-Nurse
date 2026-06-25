@@ -33,3 +33,21 @@ log_level: "INFO"
 
 # State file for crash recovery
 state_file: "~/.local/state/kanban-agent/state.json"
+
+# ── Outlook → CalDAV Calendar Sync ──────────────────────────────────────
+# Syncs Outlook calendar events to a CalDAV server (one-way mirror)
+calendar_sync:
+  enabled: false
+  interval_seconds: 900          # 15 minutes
+  days_ahead: 14
+
+  # Outlook MCP token path (reuses existing OAuth tokens)
+  outlook_token_file: "~/.sap-mcp/cookies/outlook/sap_tokens.json"
+
+  # CalDAV target (e.g., Radicale on NAS)
+  caldav_url: "https://your-nas:5232/user/calendar/"
+  caldav_username: "user"
+  caldav_password: "pass"         # or ${CALDAV_PASSWORD} for env var
+
+  # State persistence
+  state_file: "~/.local/state/head-nurse/calendar-sync-state.json"
