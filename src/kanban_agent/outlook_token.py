@@ -2,6 +2,8 @@
 
 import json
 import logging
+import os
+import tempfile
 import time
 from pathlib import Path
 
@@ -143,14 +145,18 @@ async def refresh_outlook_token(token_file: str) -> str:
         "source": "head-nurse-refresh",
     }
 
-    import os
     content = json.dumps(new_storage, indent=2)
-    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC)
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
     try:
-        os.write(fd, content.encode())
-        os.fsync(fd)
-    finally:
-        os.close(fd)
+        os.write(tmp_fd, content.encode())
+        os.fsync(tmp_fd)
+        os.close(tmp_fd)
+        os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, str(path))
+    except Exception:
+        os.close(tmp_fd)
+        os.unlink(tmp_path)
+        raise
 
     logger.info("Token refreshed successfully (expires in %ds)", expires_in)
     return access_token

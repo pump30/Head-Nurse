@@ -3,7 +3,6 @@
 import asyncio
 import json
 import logging
-import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from functools import partial
@@ -68,13 +67,13 @@ def _build_vevent(event: dict) -> str:
 
     if is_all_day:
         # All-day events use DATE format
-        start_date = datetime.fromisoformat(start_dt.rstrip("0").rstrip(".")).date()
-        end_date = datetime.fromisoformat(end_dt.rstrip("0").rstrip(".")).date()
+        start_date = datetime.fromisoformat(start_dt).date()
+        end_date = datetime.fromisoformat(end_dt).date()
         vevent.add("dtstart", start_date)
         vevent.add("dtend", end_date)
     else:
-        start = datetime.fromisoformat(start_dt.rstrip("0").rstrip(".")).replace(tzinfo=timezone.utc)
-        end = datetime.fromisoformat(end_dt.rstrip("0").rstrip(".")).replace(tzinfo=timezone.utc)
+        start = datetime.fromisoformat(start_dt).replace(tzinfo=timezone.utc)
+        end = datetime.fromisoformat(end_dt).replace(tzinfo=timezone.utc)
         vevent.add("dtstart", start)
         vevent.add("dtend", end)
 
@@ -202,16 +201,20 @@ class CalendarSync:
         )
 
         try:
+            outlook_events = []
             async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.get(
-                    url,
-                    headers={"Authorization": f"Bearer {token}"},
-                )
-                resp.raise_for_status()
+                next_url: Optional[str] = url
+                while next_url:
+                    resp = await client.get(
+                        next_url,
+                        headers={"Authorization": f"Bearer {token}"},
+                    )
+                    resp.raise_for_status()
+                    data = resp.json()
+                    outlook_events.extend(data.get("value", []))
+                    next_url = data.get("@odata.nextLink")
         except httpx.HTTPError as e:
             return SyncResult(error=f"Outlook API error: {e}")
-
-        outlook_events = resp.json().get("value", [])
 
         # 3. Get CalDAV calendar (sync lib → run in executor)
         loop = asyncio.get_running_loop()
