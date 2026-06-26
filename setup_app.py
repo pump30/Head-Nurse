@@ -30,8 +30,8 @@ OPTIONS = {
         "LSUIElement": True,
         "NSHighResolutionCapable": True,
     },
-    "packages": ["kanban_agent", "rumps", "yaml"],
-    "includes": ["kanban_agent.agent", "kanban_agent.menubar", "kanban_agent.status"],
+    "packages": ["kanban_agent", "rumps", "yaml", "httpx", "icalendar", "httpcore", "idna", "sniffio", "anyio", "h11"],
+    "includes": ["kanban_agent.agent", "kanban_agent.menubar", "kanban_agent.status", "kanban_agent.calendar_sync", "kanban_agent.outlook_token"],
 }
 
 setup(

@@ -5,7 +5,6 @@ import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from functools import partial
 from pathlib import Path
 from typing import Optional
 
@@ -26,28 +25,6 @@ class SyncResult:
     updated: int = 0
     deleted: int = 0
     error: Optional[str] = None
-
-
-def _get_caldav_calendar(url: str, username: str, password: str):
-    """Connect to CalDAV and return the calendar object.
-
-    Uses the caldav library (sync), intended to be called via run_in_executor.
-    """
-    import caldav
-
-    client = caldav.DAVClient(url=url, username=username, password=password)
-    principal = client.principal()
-    # If URL points directly to a calendar, use it; otherwise get first calendar
-    try:
-        calendar = caldav.Calendar(client=client, url=url)
-        # Verify it exists by fetching properties
-        calendar.get_properties([])
-        return calendar
-    except Exception:
-        calendars = principal.calendars()
-        if not calendars:
-            raise RuntimeError("No calendars found on CalDAV server")
-        return calendars[0]
 
 
 def _build_vevent(event: dict) -> str:
@@ -180,6 +157,26 @@ class CalendarSync:
 
             await asyncio.sleep(self._config.interval_seconds)
 
+    async def _caldav_put(self, client: httpx.AsyncClient, uid: str, ics: str) -> None:
+        """PUT an iCalendar event to CalDAV server."""
+        url = f"{self._config.caldav_url}{uid}.ics"
+        resp = await client.put(
+            url,
+            content=ics.encode("utf-8"),
+            headers={"Content-Type": "text/calendar; charset=utf-8"},
+        )
+        # 201 Created or 204 No Content are both success
+        if resp.status_code not in (200, 201, 204):
+            resp.raise_for_status()
+
+    async def _caldav_delete(self, client: httpx.AsyncClient, uid: str) -> None:
+        """DELETE an iCalendar event from CalDAV server."""
+        url = f"{self._config.caldav_url}{uid}.ics"
+        resp = await client.delete(url)
+        # 204 No Content or 404 Not Found (already gone) are both fine
+        if resp.status_code not in (200, 204, 404):
+            resp.raise_for_status()
+
     async def sync_once(self) -> SyncResult:
         """Run a single sync cycle."""
         # 1. Get token
@@ -216,66 +213,58 @@ class CalendarSync:
         except httpx.HTTPError as e:
             return SyncResult(error=f"Outlook API error: {e}")
 
-        # 3. Get CalDAV calendar (sync lib → run in executor)
-        loop = asyncio.get_running_loop()
-        try:
-            calendar = await loop.run_in_executor(
-                None,
-                partial(
-                    _get_caldav_calendar,
-                    self._config.caldav_url,
-                    self._config.caldav_username,
-                    self._config.caldav_password,
-                ),
-            )
-        except Exception as e:
-            return SyncResult(error=f"CalDAV connection error: {e}")
+        # 3. Connect to CalDAV via httpx (Basic Auth)
+        import base64
+        caldav_auth = base64.b64encode(
+            f"{self._config.caldav_username}:{self._config.caldav_password}".encode()
+        ).decode()
+        caldav_headers = {"Authorization": f"Basic {caldav_auth}"}
 
         # 4. Diff and sync
         result = SyncResult()
         current_ids = set()
 
-        for event in outlook_events:
-            event_id = event["Id"]
+        async with httpx.AsyncClient(timeout=30.0, headers=caldav_headers) as dav_client:
+            for event in outlook_events:
+                event_id = event["Id"]
 
-            # Skip cancelled events (treat as delete)
-            if event.get("IsCancelled", False):
-                continue
+                # Skip cancelled events (treat as delete)
+                if event.get("IsCancelled", False):
+                    continue
 
-            current_ids.add(event_id)
-            last_modified = event.get("LastModifiedDateTime", "")
-            existing = self._state.events.get(event_id)
+                current_ids.add(event_id)
+                last_modified = event.get("LastModifiedDateTime", "")
+                existing = self._state.events.get(event_id)
 
-            if existing is None:
-                # New event → create
+                if existing is None:
+                    # New event → create
+                    try:
+                        ics = _build_vevent(event)
+                        await self._caldav_put(dav_client, f"outlook-{event_id}", ics)
+                        self._state.set_event(event_id, f"outlook-{event_id}", last_modified)
+                        result.created += 1
+                    except Exception:
+                        logger.warning("Failed to create event %s", event_id, exc_info=True)
+                elif existing.get("last_modified") != last_modified:
+                    # Modified → update (PUT with same UID overwrites)
+                    try:
+                        ics = _build_vevent(event)
+                        await self._caldav_put(dav_client, f"outlook-{event_id}", ics)
+                        self._state.set_event(event_id, f"outlook-{event_id}", last_modified)
+                        result.updated += 1
+                    except Exception:
+                        logger.warning("Failed to update event %s", event_id, exc_info=True)
+
+            # 5. Delete events no longer in Outlook
+            state_ids = set(self._state.events.keys())
+            for gone_id in state_ids - current_ids:
+                uid = self._state.events[gone_id]["uid"]
                 try:
-                    ics = _build_vevent(event)
-                    await loop.run_in_executor(None, calendar.save_event, ics)
-                    self._state.set_event(event_id, f"outlook-{event_id}", last_modified)
-                    result.created += 1
+                    await self._caldav_delete(dav_client, uid)
+                    self._state.remove_event(gone_id)
+                    result.deleted += 1
                 except Exception:
-                    logger.warning("Failed to create event %s", event_id, exc_info=True)
-            elif existing.get("last_modified") != last_modified:
-                # Modified → update (PUT with same UID overwrites)
-                try:
-                    ics = _build_vevent(event)
-                    await loop.run_in_executor(None, calendar.save_event, ics)
-                    self._state.set_event(event_id, f"outlook-{event_id}", last_modified)
-                    result.updated += 1
-                except Exception:
-                    logger.warning("Failed to update event %s", event_id, exc_info=True)
-
-        # 5. Delete events no longer in Outlook
-        state_ids = set(self._state.events.keys())
-        for gone_id in state_ids - current_ids:
-            uid = self._state.events[gone_id]["uid"]
-            try:
-                event_obj = await loop.run_in_executor(None, calendar.event_by_uid, uid)
-                await loop.run_in_executor(None, event_obj.delete)
-                self._state.remove_event(gone_id)
-                result.deleted += 1
-            except Exception:
-                logger.warning("Failed to delete event %s (uid=%s)", gone_id, uid, exc_info=True)
+                    logger.warning("Failed to delete event %s (uid=%s)", gone_id, uid, exc_info=True)
 
         # 6. Persist state
         self._state.set_last_sync(now.isoformat())
