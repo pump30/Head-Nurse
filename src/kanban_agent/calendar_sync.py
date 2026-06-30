@@ -3,7 +3,8 @@
 import asyncio
 import json
 import logging
-from dataclasses import dataclass
+import subprocess
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
@@ -18,6 +19,7 @@ from .outlook_token import TokenError, get_outlook_token
 logger = logging.getLogger(__name__)
 
 OUTLOOK_API_BASE = "https://outlook.office.com/api/v2.0"
+SEND_EMAIL_SCRIPT = Path.home() / ".claude" / "skills" / "send-email" / "scripts" / "send.py"
 
 
 @dataclass
@@ -26,6 +28,7 @@ class SyncResult:
     updated: int = 0
     deleted: int = 0
     error: Optional[str] = None
+    notified_events: list = field(default_factory=list)
 
 
 def _build_vevent(event: dict) -> str:
@@ -67,6 +70,42 @@ def _build_vevent(event: dict) -> str:
 
     cal.add_component(vevent)
     return cal.to_ical().decode("utf-8")
+
+
+def _send_new_event_email(events: list[dict]) -> None:
+    """Send email notification for newly synced calendar events."""
+    if not events or not SEND_EMAIL_SCRIPT.exists():
+        return
+
+    lines = []
+    for ev in events:
+        subject = ev.get("Subject", "(No Subject)")
+        start_str = ev["Start"]["DateTime"][:16].replace("T", " ")
+        location = ev.get("Location", {}).get("DisplayName", "")
+        line = f"• {start_str} — {subject}"
+        if location:
+            line += f" @ {location}"
+        lines.append(line)
+
+    body = "以下新日程已同步到你的日历：\n\n" + "\n".join(lines)
+    subject = f"📅 新日程: {events[0].get('Subject', 'New Event')}"
+    if len(events) > 1:
+        subject = f"📅 {len(events)} 个新日程已同步"
+
+    try:
+        subprocess.run(
+            [
+                "python3", str(SEND_EMAIL_SCRIPT),
+                "--subject", subject,
+                "--body", body,
+            ],
+            check=False,
+            capture_output=True,
+            timeout=15,
+        )
+        logger.info("Sent email notification for %d new event(s)", len(events))
+    except Exception:
+        logger.warning("Failed to send new event email", exc_info=True)
 
 
 class _SyncState:
@@ -250,6 +289,7 @@ class CalendarSync:
         result = SyncResult()
         current_ids = set()
         failures = 0
+        new_events: list[dict] = []
 
         async with httpx.AsyncClient(timeout=30.0, headers=caldav_headers) as dav_client:
             for event in outlook_events:
@@ -270,6 +310,7 @@ class CalendarSync:
                         await self._caldav_put(dav_client, f"outlook-{event_id}", ics)
                         self._state.set_event(event_id, f"outlook-{event_id}", last_modified)
                         result.created += 1
+                        new_events.append(event)
                     except Exception:
                         failures += 1
                         logger.warning("Failed to create event %s", event_id, exc_info=True)
@@ -305,5 +346,10 @@ class CalendarSync:
             self._state.set_last_sync(now.isoformat())
             self._state.save()
             self._last_sync_time = datetime.now().strftime("%H:%M")
+
+        # 7. Send email for newly created events
+        if new_events:
+            _send_new_event_email(new_events)
+            result.notified_events = new_events
 
         return result
