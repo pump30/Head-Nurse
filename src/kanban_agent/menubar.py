@@ -13,6 +13,7 @@ import rumps
 from .agent import KanbanAgent
 from .calendar_sync import CalendarSync
 from .config import Config
+from .device_code_flow import DeviceFlowState
 from .logging_setup import setup_logging
 from .status import AgentStatus, StatusHolder
 
@@ -41,6 +42,7 @@ class MenubarApp:
         self.app.menu = [
             "status_row",
             "calendar_row",
+            "calendar_auth",
             None,
             "toggle",
             "restart",
@@ -59,6 +61,7 @@ class MenubarApp:
         self._fallback_status = StatusHolder()
         self._notified_crash = False
         self._notified_no_config = False
+        self._notified_auth_needed = False
 
         self._timer = rumps.Timer(self._tick, POLL_INTERVAL)
         self._timer.start()
@@ -69,6 +72,9 @@ class MenubarApp:
         m["status_row"].set_callback(None)  # disabled
         m["calendar_row"].title = "📅 Calendar: --"
         m["calendar_row"].set_callback(None)  # disabled
+        m["calendar_auth"].title = "🔑 Re-authenticate Calendar"
+        m["calendar_auth"].set_callback(self._on_calendar_auth)
+        m["calendar_auth"].hidden = True
         m["toggle"].title = "Start Agent"
         m["toggle"].set_callback(self._on_toggle)
         m["restart"].title = "Restart Agent"
@@ -169,13 +175,37 @@ class MenubarApp:
         m["status_row"].title = status.menu_text
         self.app.icon = _icon_path(status.icon_name)
 
-        # Update calendar sync status
-        if self._calendar_sync and self._calendar_sync.last_sync_time:
-            m["calendar_row"].title = f"📅 Calendar: synced {self._calendar_sync.last_sync_time}"
-        elif self._calendar_sync:
-            m["calendar_row"].title = "📅 Calendar: pending"
+        # Update calendar sync status (with auth state awareness)
+        if self._calendar_sync:
+            auth_state = self._calendar_sync.auth_state
+            if auth_state in (DeviceFlowState.AWAITING_USER, DeviceFlowState.POLLING):
+                code = self._calendar_sync.auth_user_code or "..."
+                m["calendar_row"].title = f"📅 Calendar: {code}"
+                m["calendar_auth"].title = "🔑 Re-authenticate Calendar"
+                m["calendar_auth"].hidden = False
+                self._notified_auth_needed = True
+            elif auth_state == DeviceFlowState.SUCCESS:
+                m["calendar_auth"].hidden = True
+                self._notified_auth_needed = False
+                self._calendar_sync._device_flow.reset()
+                m["calendar_row"].title = "📅 Calendar: synced ✓"
+            elif auth_state in (DeviceFlowState.FAILED, DeviceFlowState.EXPIRED):
+                m["calendar_row"].title = "📅 Calendar: auth failed"
+                m["calendar_auth"].title = "🔑 Re-authenticate Calendar"
+                m["calendar_auth"].hidden = False
+                self._notified_auth_needed = False
+                self._calendar_sync._device_flow.reset()
+            elif self._calendar_sync.last_sync_time:
+                m["calendar_row"].title = (
+                    f"📅 Calendar: synced {self._calendar_sync.last_sync_time}"
+                )
+                m["calendar_auth"].hidden = True
+            else:
+                m["calendar_row"].title = "📅 Calendar: pending"
+                m["calendar_auth"].hidden = True
         else:
             m["calendar_row"].title = "📅 Calendar: off"
+            m["calendar_auth"].hidden = True
 
         running_like = status.state in ("running", "starting")
         m["toggle"].title = "Stop Agent" if running_like else "Start Agent"
@@ -199,6 +229,14 @@ class MenubarApp:
     def _on_restart(self, _sender) -> None:
         self._stop_agent()
         self._start_agent()
+
+    def _on_calendar_auth(self, _sender) -> None:
+        """User clicked Re-authenticate Calendar — trigger Playwright browser flow."""
+        if self._calendar_sync and self._loop and self._loop.is_running():
+            if not self._calendar_sync._device_flow.is_in_progress:
+                asyncio.run_coroutine_threadsafe(
+                    self._calendar_sync._device_flow.initiate(), self._loop
+                )
 
     def _on_open_config(self, _sender) -> None:
         path = Path.home() / ".config" / "kanban-agent" / "config.yaml"
