@@ -12,6 +12,7 @@ import httpx
 from icalendar import Calendar, Event
 
 from .config import CalendarSyncConfig
+from .device_code_flow import DeviceCodeFlowManager, DeviceFlowState
 from .outlook_token import TokenError, get_outlook_token
 
 logger = logging.getLogger(__name__)
@@ -113,10 +114,21 @@ class CalendarSync:
         self._task: Optional[asyncio.Task] = None
         self._last_sync_time: Optional[str] = None
         self._state = _SyncState(config.state_file)
+        self._device_flow = DeviceCodeFlowManager(config.outlook_token_file)
 
     @property
     def last_sync_time(self) -> Optional[str]:
         return self._last_sync_time
+
+    @property
+    def auth_state(self) -> DeviceFlowState:
+        """Current device code flow state (polled by menubar)."""
+        return self._device_flow.state
+
+    @property
+    def auth_user_code(self) -> Optional[str]:
+        """User code to display during device flow auth."""
+        return self._device_flow.user_code
 
     async def start(self) -> None:
         """Start the periodic sync loop."""
@@ -183,7 +195,21 @@ class CalendarSync:
         try:
             token = await get_outlook_token(self._config.outlook_token_file)
         except TokenError as e:
-            return SyncResult(error=str(e))
+            # Token refresh failed — initiate device code flow as fallback
+            if not self._device_flow.is_in_progress:
+                logger.warning(
+                    "Token refresh failed, initiating device code flow: %s", e
+                )
+                await self._device_flow.initiate()
+            return SyncResult(error=f"Auth needed: {e}")
+
+        # Token obtained successfully — reset any stale flow state
+        if self._device_flow.state in (
+            DeviceFlowState.SUCCESS,
+            DeviceFlowState.FAILED,
+            DeviceFlowState.EXPIRED,
+        ):
+            self._device_flow.reset()
 
         # 2. Fetch Outlook events
         now = datetime.now(timezone.utc)
@@ -223,6 +249,7 @@ class CalendarSync:
         # 4. Diff and sync
         result = SyncResult()
         current_ids = set()
+        failures = 0
 
         async with httpx.AsyncClient(timeout=30.0, headers=caldav_headers) as dav_client:
             for event in outlook_events:
@@ -244,6 +271,7 @@ class CalendarSync:
                         self._state.set_event(event_id, f"outlook-{event_id}", last_modified)
                         result.created += 1
                     except Exception:
+                        failures += 1
                         logger.warning("Failed to create event %s", event_id, exc_info=True)
                 elif existing.get("last_modified") != last_modified:
                     # Modified → update (PUT with same UID overwrites)
@@ -253,6 +281,7 @@ class CalendarSync:
                         self._state.set_event(event_id, f"outlook-{event_id}", last_modified)
                         result.updated += 1
                     except Exception:
+                        failures += 1
                         logger.warning("Failed to update event %s", event_id, exc_info=True)
 
             # 5. Delete events no longer in Outlook
@@ -264,11 +293,17 @@ class CalendarSync:
                     self._state.remove_event(gone_id)
                     result.deleted += 1
                 except Exception:
+                    failures += 1
                     logger.warning("Failed to delete event %s (uid=%s)", gone_id, uid, exc_info=True)
 
-        # 6. Persist state
-        self._state.set_last_sync(now.isoformat())
-        self._state.save()
-        self._last_sync_time = now.strftime("%H:%M")
+        # 6. Persist state and update sync time only if no failures
+        if failures > 0:
+            result.error = f"CalDAV: {failures} operations failed"
+            # Still save state for partial successes
+            self._state.save()
+        else:
+            self._state.set_last_sync(now.isoformat())
+            self._state.save()
+            self._last_sync_time = datetime.now().strftime("%H:%M")
 
         return result
