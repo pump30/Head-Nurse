@@ -97,3 +97,38 @@ calendar_sync:
 - Syncs today + 14 days ahead
 - Creates, updates, and deletes events to match Outlook
 - Token refresh handled automatically
+
+**Auto Re-authentication:**
+
+When the Outlook OAuth refresh token expires (e.g., after 90 days of inactivity or admin revocation), the sync automatically recovers:
+
+1. Token refresh fails → triggers Playwright browser flow
+2. Chrome opens with SSO (uses `~/.sap-mcp/chrome-profile` for session persistence)
+3. MSAL tokens are extracted from localStorage (same technique as Outlook MCP)
+4. New access + refresh tokens are saved → sync resumes
+
+The menu bar shows authentication state:
+- `📅 Calendar: synced 15:30` — normal operation
+- `📅 Calendar: sign in in browser...` — Playwright is authenticating
+- `📅 Calendar: auth failed` — authentication failed
+- `🔑 Re-authenticate Calendar` — clickable menu item (appears when auth is needed, allows manual retry)
+
+**Email Notifications:**
+
+When sync discovers new events (created since the last sync), an email is sent to `1069235479@qq.com` listing all new calendar entries. This uses the `send-email` skill's Gmail SMTP script.
+
+Example email:
+```
+Subject: 📅 3 个新日程已同步
+
+以下新日程已同步到你的日历：
+
+• 2026-07-01T09:00 — Regular Change(July) - Scope Finalization @ Teams
+• 2026-07-06T10:00 — Follow-up: AI Experiments
+• 2026-07-09T08:00 — SAP Experience Garage Community Onboarding
+```
+
+**Error Handling:**
+- CalDAV write failures are tracked; sync time only updates on full success
+- Individual event failures don't abort the sync — partial progress is saved
+- Menu bar shows error state instead of stale "synced" timestamp when CalDAV is unreachable

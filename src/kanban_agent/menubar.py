@@ -43,6 +43,7 @@ class MenubarApp:
             "status_row",
             "calendar_row",
             "calendar_auth",
+            "vk_row",
             None,
             "toggle",
             "restart",
@@ -75,6 +76,8 @@ class MenubarApp:
         m["calendar_auth"].title = "🔑 Re-authenticate Calendar"
         m["calendar_auth"].set_callback(self._on_calendar_auth)
         m["calendar_auth"].hidden = True
+        m["vk_row"].title = "🔲 VK: checking..."
+        m["vk_row"].set_callback(self._on_vk_open)
         m["toggle"].title = "Start Agent"
         m["toggle"].set_callback(self._on_toggle)
         m["restart"].title = "Restart Agent"
@@ -219,6 +222,36 @@ class MenubarApp:
             )
             self._notified_crash = True
 
+        # Update Vibe Kanban status
+        self._update_vk_status(m)
+
+    def _update_vk_status(self, m) -> None:
+        """Check if VK + proxy + tunnel are running and update menu."""
+        vk_ok = self._is_process_running("vibe-kanban")
+        proxy_ok = self._is_process_running("proxy.js")
+        tunnel_ok = self._is_process_running("cloudflared")
+
+        if vk_ok and proxy_ok and tunnel_ok:
+            m["vk_row"].title = "🔲 VK: online"
+        elif vk_ok and proxy_ok:
+            m["vk_row"].title = "🔲 VK: no tunnel"
+        elif vk_ok:
+            m["vk_row"].title = "🔲 VK: no proxy"
+        else:
+            m["vk_row"].title = "🔲 VK: stopped"
+
+    @staticmethod
+    def _is_process_running(name: str) -> bool:
+        """Check if a process with the given name fragment is running."""
+        try:
+            result = subprocess.run(
+                ["pgrep", "-f", name],
+                capture_output=True, timeout=2,
+            )
+            return result.returncode == 0
+        except Exception:
+            return False
+
     # ── Menu callbacks ───────────────────────────────────────────────────
     def _on_toggle(self, _sender) -> None:
         if self._agent is None:
@@ -237,6 +270,18 @@ class MenubarApp:
                 asyncio.run_coroutine_threadsafe(
                     self._calendar_sync._device_flow.initiate(), self._loop
                 )
+
+    def _on_vk_open(self, _sender) -> None:
+        """Click VK row — ensure all services running, then open in browser."""
+        # Start any missing services via launchctl
+        for label in ("com.vibe-kanban", "com.vibe-kanban-proxy", "com.cloudflared.kanban"):
+            plist = Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
+            if plist.exists():
+                subprocess.run(
+                    ["launchctl", "load", "-w", str(plist)],
+                    capture_output=True, check=False,
+                )
+        subprocess.run(["open", "https://vk.superdyland.uk"], check=False)
 
     def _on_open_config(self, _sender) -> None:
         path = Path.home() / ".config" / "kanban-agent" / "config.yaml"
